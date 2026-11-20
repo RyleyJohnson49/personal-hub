@@ -5,20 +5,24 @@ const IMPORTANCE_LABELS = { high: 'High', medium: 'Medium', low: 'Low' };
 const HORIZON_LABELS = { today: 'Today', 'this-week': 'This Week', 'this-month': 'This Month', someday: 'Someday' };
 const UPGRADE_STATUS_LABELS = { someday: 'Someday', budgeting: 'Budgeting', 'in-progress': 'In Progress', done: 'Done' };
 const UPGRADE_SUBCAT_LABELS = { tech: 'Tech', home: 'Home', wardrobe: 'Wardrobe', experience: 'Experience', health: 'Health' };
-const READING_STATUS_LABELS = { want: 'Want to Read', reading: 'Reading', done: 'Done' };
+const GENRE_LABELS = { fiction: 'Fiction', nonfiction: 'Nonfiction' };
 const MEDIA_STATUS_LABELS = { want: 'Want to Watch', watching: 'Watching', done: 'Done' };
 const MEDIA_TYPE_LABELS = { film: 'Film', show: 'Show', podcast: 'Podcast' };
+
+const HORIZON_ORDER       = { today: 0, 'this-week': 1, 'this-month': 2, someday: 3 };
+const IMPORTANCE_ORDER    = { high: 0, medium: 1, low: 2 };
+const UPGRADE_STATUS_ORDER = { someday: 0, budgeting: 1, 'in-progress': 2, done: 3 };
 
 // ── State ──────────────────────────────────────────────────────────────────────
 
 const state = {
   module: 'tasks',
   filters: {
-    tasks: { category: '', importance: '', horizon: '', showDone: false },
-    dining: {},
-    upgrades: { status: '', subcategory: '' },
-    reading: { status: '' },
-    media: { status: '', type: '' }
+    tasks:    { category: '', importance: '', horizon: '', showDone: false, sortBy: '', sortDir: 'asc', groupBy: '' },
+    dining:   { showDone: false },
+    upgrades: { status: '', subcategory: '', sortBy: '', sortDir: 'asc', groupBy: '', showDone: false },
+    reading:  { genre: '', showDone: false },
+    media:    { type: '', showDone: false }
   },
   data: { tasks: [], dining: [], upgrades: [], people: [], reading: [], media: [] }
 };
@@ -118,6 +122,56 @@ function showToast(msg) {
   el.textContent = msg;
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+function sortItems(items, sortBy, sortDir) {
+  if (!sortBy) return items;
+  const dir = sortDir === 'desc' ? -1 : 1;
+  return [...items].sort((a, b) => {
+    switch (sortBy) {
+      case 'title': case 'item':
+        return dir * (a[sortBy] || '').toLowerCase().localeCompare((b[sortBy] || '').toLowerCase());
+      case 'dueDate': {
+        const av = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+        const bv = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+        return dir * (av - bv);
+      }
+      case 'importance':
+        return dir * ((IMPORTANCE_ORDER[a.importance] ?? 99) - (IMPORTANCE_ORDER[b.importance] ?? 99));
+      case 'horizon':
+        return dir * ((HORIZON_ORDER[a.horizon] ?? 99) - (HORIZON_ORDER[b.horizon] ?? 99));
+      case 'status':
+        return dir * ((UPGRADE_STATUS_ORDER[a.status] ?? 99) - (UPGRADE_STATUS_ORDER[b.status] ?? 99));
+      case 'costEstimate':
+        return dir * ((parseFloat(a.costEstimate) || 0) - (parseFloat(b.costEstimate) || 0));
+      case 'createdAt':
+        return dir * ((a.createdAt ? new Date(a.createdAt).getTime() : 0) - (b.createdAt ? new Date(b.createdAt).getTime() : 0));
+    }
+    return 0;
+  });
+}
+
+function groupItems(items, groupBy) {
+  if (!groupBy) return [{ label: null, items }];
+  const configs = {
+    horizon:     { labels: HORIZON_LABELS,       order: ['today', 'this-week', 'this-month', 'someday', '__none__'], none: 'No Horizon' },
+    importance:  { labels: IMPORTANCE_LABELS,     order: ['high', 'medium', 'low', '__none__'],                       none: 'No Priority' },
+    category:    { labels: CATEGORY_LABELS,       order: [...Object.keys(CATEGORY_LABELS), '__none__'],                none: 'No Category' },
+    status:      { labels: UPGRADE_STATUS_LABELS, order: [...Object.keys(UPGRADE_STATUS_LABELS), '__none__'],          none: 'No Status' },
+    subcategory: { labels: UPGRADE_SUBCAT_LABELS, order: [...Object.keys(UPGRADE_SUBCAT_LABELS), '__none__'],          none: 'No Category' },
+  };
+  const cfg = configs[groupBy] || { labels: {}, order: [], none: 'Other' };
+  const groups = {};
+  for (const item of items) {
+    const key = item[groupBy] || '__none__';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(item);
+  }
+  const seen = new Set(cfg.order);
+  const extraKeys = Object.keys(groups).filter(k => !seen.has(k));
+  return [...cfg.order, ...extraKeys]
+    .filter(k => groups[k])
+    .map(k => ({ label: k === '__none__' ? cfg.none : (cfg.labels[k] || k), items: groups[k] }));
 }
 
 // ── Navigation ─────────────────────────────────────────────────────────────────
@@ -321,6 +375,25 @@ function renderTasks(main) {
   const active = items.filter(t => t.status === 'todo');
   const done   = items.filter(t => t.status === 'done');
 
+  const sorted = sortItems(active, f.sortBy, f.sortDir);
+  const groups = groupItems(sorted, f.groupBy);
+  const hasGroups = f.groupBy && groups.some(g => g.label);
+
+  let taskListContent;
+  if (active.length === 0 && !f.showDone) {
+    taskListContent = emptyState('Tasks', 'Nothing here. Add a task to get started.');
+  } else if (hasGroups) {
+    taskListContent = groups.map(g =>
+      `<div class="section-divider">${esc(g.label)} <span class="group-count">${g.items.length}</span></div>${g.items.map(taskItemHTML).join('')}`
+    ).join('');
+  } else {
+    taskListContent = sorted.map(taskItemHTML).join('');
+  }
+  if (f.showDone && done.length > 0) {
+    const sortedDone = sortItems(done, f.sortBy, f.sortDir);
+    taskListContent += `<div class="section-divider">Completed (${done.length})</div>${sortedDone.map(taskItemHTML).join('')}`;
+  }
+
   main.innerHTML = `
     <div class="module-header">
       <div class="module-title-wrap">
@@ -345,6 +418,21 @@ function renderTasks(main) {
         <option value="">All Horizons</option>
         ${Object.entries(HORIZON_LABELS).map(([v,l]) => `<option value="${v}"${f.horizon===v?' selected':''}>${l}</option>`).join('')}
       </select>
+      <select class="filter-select" id="filterSortBy">
+        <option value="">Sort: Default</option>
+        <option value="dueDate"${f.sortBy==='dueDate'?' selected':''}>Due Date</option>
+        <option value="importance"${f.sortBy==='importance'?' selected':''}>Priority</option>
+        <option value="horizon"${f.sortBy==='horizon'?' selected':''}>Horizon</option>
+        <option value="title"${f.sortBy==='title'?' selected':''}>Name</option>
+        <option value="createdAt"${f.sortBy==='createdAt'?' selected':''}>Date Added</option>
+      </select>
+      ${f.sortBy ? `<button class="sort-dir-btn" id="sortDirBtn" title="Reverse sort order">${f.sortDir === 'asc' ? '↑' : '↓'}</button>` : ''}
+      <select class="filter-select" id="filterGroupBy">
+        <option value="">Group: None</option>
+        <option value="horizon"${f.groupBy==='horizon'?' selected':''}>by Horizon</option>
+        <option value="importance"${f.groupBy==='importance'?' selected':''}>by Priority</option>
+        <option value="category"${f.groupBy==='category'?' selected':''}>by Category</option>
+      </select>
       <span class="filter-spacer"></span>
       <label class="toggle-label">
         <input type="checkbox" id="showDoneToggle"${f.showDone?' checked':''}>
@@ -352,15 +440,16 @@ function renderTasks(main) {
         Show completed
       </label>
     </div>
-    <div class="task-list" id="taskList">
-      ${active.length === 0 && !f.showDone ? emptyState('Tasks', 'Nothing here. Add a task to get started.') : active.map(taskItemHTML).join('')}
-      ${f.showDone && done.length > 0 ? `<div class="section-divider">Completed (${done.length})</div>${done.map(taskItemHTML).join('')}` : ''}
-    </div>`;
+    <div class="task-list" id="taskList">${taskListContent}</div>`;
 
   document.getElementById('addTaskBtn').addEventListener('click', () => openTaskModal());
   document.getElementById('filterCategory').addEventListener('change', e => { state.filters.tasks.category = e.target.value; renderModule(); });
   document.getElementById('filterImportance').addEventListener('change', e => { state.filters.tasks.importance = e.target.value; renderModule(); });
   document.getElementById('filterHorizon').addEventListener('change', e => { state.filters.tasks.horizon = e.target.value; renderModule(); });
+  document.getElementById('filterSortBy').addEventListener('change', e => { state.filters.tasks.sortBy = e.target.value; renderModule(); });
+  const sortDirBtn = document.getElementById('sortDirBtn');
+  if (sortDirBtn) sortDirBtn.addEventListener('click', () => { state.filters.tasks.sortDir = state.filters.tasks.sortDir === 'asc' ? 'desc' : 'asc'; renderModule(); });
+  document.getElementById('filterGroupBy').addEventListener('change', e => { state.filters.tasks.groupBy = e.target.value; renderModule(); });
   document.getElementById('showDoneToggle').addEventListener('change', e => { state.filters.tasks.showDone = e.target.checked; renderModule(); });
 
   document.getElementById('taskList').addEventListener('click', e => {
@@ -461,7 +550,20 @@ function deleteTask(id) {
 // ── DINING ─────────────────────────────────────────────────────────────────────
 
 function renderDining(main) {
-  const items = state.data.dining;
+  const f = state.filters.dining;
+  const active = state.data.dining.filter(d => d.status !== 'done');
+  const done   = state.data.dining.filter(d => d.status === 'done');
+
+  let gridContent;
+  if (active.length === 0 && !f.showDone) {
+    gridContent = emptyState('Dining', 'Your wishlist is empty. Add a restaurant to get started.');
+  } else {
+    gridContent = `<div class="card-grid">${active.map(diningCardHTML).join('')}</div>`;
+    if (f.showDone && done.length > 0) {
+      gridContent += `<div class="section-divider" style="margin-top:20px;">Visited <span class="group-count">${done.length}</span></div><div class="card-grid">${done.map(diningCardHTML).join('')}</div>`;
+    }
+  }
+
   main.innerHTML = `
     <div class="module-header">
       <div class="module-title-wrap">
@@ -473,27 +575,47 @@ function renderDining(main) {
         Add Place
       </button>
     </div>
-    ${items.length === 0 ? emptyState('Dining', 'Your wishlist is empty. Add a restaurant to get started.') :
-      `<div class="card-grid" id="diningGrid">${items.map(diningCardHTML).join('')}</div>`}`;
+    <div class="filter-bar">
+      <span class="filter-spacer"></span>
+      <label class="toggle-label">
+        <input type="checkbox" id="showDiningDoneToggle"${f.showDone?' checked':''}>
+        <span class="toggle-track"></span>
+        Show visited
+      </label>
+    </div>
+    ${gridContent}`;
 
   document.getElementById('addDiningBtn').addEventListener('click', () => openDiningModal());
-  main.querySelectorAll('[data-edit-dining]').forEach(btn => {
-    btn.addEventListener('click', () => openDiningModal(state.data.dining.find(d => d.id === btn.dataset.editDining)));
-  });
-  main.querySelectorAll('[data-delete-dining]').forEach(btn => {
-    btn.addEventListener('click', () => { state.data.dining = state.data.dining.filter(d => d.id !== btn.dataset.deleteDining); saveData(); renderModule(); });
-  });
-  main.querySelectorAll('[data-visited]').forEach(btn => {
-    btn.addEventListener('click', () => { state.data.dining = state.data.dining.filter(d => d.id !== btn.dataset.visited); saveData(); renderModule(); showToast('Marked as visited'); });
+  document.getElementById('showDiningDoneToggle').addEventListener('change', e => { state.filters.dining.showDone = e.target.checked; renderModule(); });
+  main.addEventListener('click', e => {
+    const check = e.target.closest('[data-check-dining]');
+    if (check) { toggleDining(check.dataset.checkDining); return; }
+    const edit = e.target.closest('[data-edit-dining]');
+    if (edit) { openDiningModal(state.data.dining.find(d => d.id === edit.dataset.editDining)); return; }
+    const del = e.target.closest('[data-delete-dining]');
+    if (del) { state.data.dining = state.data.dining.filter(d => d.id !== del.dataset.deleteDining); saveData(); renderModule(); }
   });
 }
 
+function toggleDining(id) {
+  const place = state.data.dining.find(d => d.id === id);
+  if (!place) return;
+  place.status = place.status === 'done' ? 'todo' : 'done';
+  saveData(); renderModule();
+}
+
 function diningCardHTML(d) {
-  return `<div class="card">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+  const isDone = d.status === 'done';
+  return `<div class="card${isDone ? ' card-done' : ''}">
+    <div style="display:flex;align-items:flex-start;gap:10px;">
+      <div class="card-check${isDone ? ' checked' : ''}" data-check-dining="${d.id}" role="checkbox" aria-checked="${isDone}" style="margin-top:2px;">
+        <svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/></svg>
+      </div>
       <div style="flex:1;min-width:0;">
-        <div class="card-title">${esc(d.name)}</div>
+        <div class="card-title${isDone ? ' done-title' : ''}">${esc(d.name)}</div>
         ${d.location ? `<div class="card-subtitle">${esc(d.location)}</div>` : ''}
+        ${d.cuisine ? `<div class="card-meta" style="margin-top:6px;"><span class="badge badge-horizon">${esc(d.cuisine)}</span></div>` : ''}
+        ${d.notes ? `<div class="card-notes">${esc(d.notes)}</div>` : ''}
       </div>
       <div class="card-actions">
         <button class="btn-icon" data-edit-dining="${d.id}" title="Edit">
@@ -503,11 +625,6 @@ function diningCardHTML(d) {
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4h10M6 4V2.5h4V4M5 4l.5 9h5l.5-9"/></svg>
         </button>
       </div>
-    </div>
-    ${d.cuisine ? `<div style="margin-top:8px;"><span class="badge badge-horizon">${esc(d.cuisine)}</span></div>` : ''}
-    ${d.notes ? `<div class="card-notes">${esc(d.notes)}</div>` : ''}
-    <div style="margin-top:12px;">
-      <button class="btn btn-sm btn-secondary" data-visited="${d.id}">Been here ✓</button>
     </div>
   </div>`;
 }
@@ -539,8 +656,24 @@ function renderUpgrades(main) {
   const items = state.data.upgrades.filter(u => {
     if (f.status && u.status !== f.status) return false;
     if (f.subcategory && u.subcategory !== f.subcategory) return false;
+    if (!f.showDone && u.status === 'done') return false;
     return true;
   });
+
+  const sorted = sortItems(items, f.sortBy, f.sortDir);
+  const groups = groupItems(sorted, f.groupBy);
+  const hasGroups = f.groupBy && groups.some(g => g.label);
+
+  let upgradeListContent;
+  if (items.length === 0) {
+    upgradeListContent = emptyState('Upgrades', 'Nothing aspirational yet. Add an upgrade to get started.');
+  } else if (hasGroups) {
+    upgradeListContent = groups.map(g =>
+      `<div class="section-divider">${esc(g.label)} <span class="group-count">${g.items.length}</span></div>${g.items.map(upgradeItemHTML).join('')}`
+    ).join('');
+  } else {
+    upgradeListContent = sorted.map(upgradeItemHTML).join('');
+  }
 
   main.innerHTML = `
     <div class="module-header">
@@ -562,14 +695,35 @@ function renderUpgrades(main) {
         <option value="">All Categories</option>
         ${Object.entries(UPGRADE_SUBCAT_LABELS).map(([v,l]) => `<option value="${v}"${f.subcategory===v?' selected':''}>${l}</option>`).join('')}
       </select>
+      <select class="filter-select" id="filterUpgradeSortBy">
+        <option value="">Sort: Default</option>
+        <option value="item"${f.sortBy==='item'?' selected':''}>Name</option>
+        <option value="costEstimate"${f.sortBy==='costEstimate'?' selected':''}>Cost</option>
+        <option value="status"${f.sortBy==='status'?' selected':''}>Status</option>
+      </select>
+      ${f.sortBy ? `<button class="sort-dir-btn" id="sortDirBtnU" title="Reverse sort order">${f.sortDir === 'asc' ? '↑' : '↓'}</button>` : ''}
+      <select class="filter-select" id="filterUpgradeGroupBy">
+        <option value="">Group: None</option>
+        <option value="status"${f.groupBy==='status'?' selected':''}>by Status</option>
+        <option value="subcategory"${f.groupBy==='subcategory'?' selected':''}>by Category</option>
+      </select>
+      <span class="filter-spacer"></span>
+      <label class="toggle-label">
+        <input type="checkbox" id="showUpgradeDoneToggle"${f.showDone?' checked':''}>
+        <span class="toggle-track"></span>
+        Show completed
+      </label>
     </div>
-    <div class="upgrade-list">
-      ${items.length === 0 ? emptyState('Upgrades', 'Nothing aspirational yet. Add an upgrade to get started.') : items.map(upgradeItemHTML).join('')}
-    </div>`;
+    <div class="upgrade-list">${upgradeListContent}</div>`;
 
   document.getElementById('addUpgradeBtn').addEventListener('click', () => openUpgradeModal());
   document.getElementById('filterUpgradeStatus').addEventListener('change', e => { state.filters.upgrades.status = e.target.value; renderModule(); });
   document.getElementById('filterUpgradeSubcat').addEventListener('change', e => { state.filters.upgrades.subcategory = e.target.value; renderModule(); });
+  document.getElementById('filterUpgradeSortBy').addEventListener('change', e => { state.filters.upgrades.sortBy = e.target.value; renderModule(); });
+  const sortDirBtnU = document.getElementById('sortDirBtnU');
+  if (sortDirBtnU) sortDirBtnU.addEventListener('click', () => { state.filters.upgrades.sortDir = state.filters.upgrades.sortDir === 'asc' ? 'desc' : 'asc'; renderModule(); });
+  document.getElementById('filterUpgradeGroupBy').addEventListener('change', e => { state.filters.upgrades.groupBy = e.target.value; renderModule(); });
+  document.getElementById('showUpgradeDoneToggle').addEventListener('change', e => { state.filters.upgrades.showDone = e.target.checked; renderModule(); });
   main.querySelectorAll('[data-edit-upgrade]').forEach(btn => {
     btn.addEventListener('click', () => openUpgradeModal(state.data.upgrades.find(u => u.id === btn.dataset.editUpgrade)));
   });
@@ -579,7 +733,7 @@ function renderUpgrades(main) {
 }
 
 function upgradeItemHTML(u) {
-  return `<div class="upgrade-item">
+  return `<div class="upgrade-item${u.status === 'done' ? ' upgrade-done' : ''}">
     <div class="upgrade-body">
       <div class="upgrade-title">${esc(u.item)}</div>
       <div class="upgrade-meta">
@@ -713,7 +867,19 @@ function openPersonModal(item) {
 
 function renderReading(main) {
   const f = state.filters.reading;
-  const items = state.data.reading.filter(r => !f.status || r.status === f.status);
+  const items = state.data.reading.filter(r => !f.genre || r.genre === f.genre);
+  const active = items.filter(r => r.status !== 'done');
+  const done   = items.filter(r => r.status === 'done');
+
+  let gridContent;
+  if (active.length === 0 && !f.showDone) {
+    gridContent = emptyState('Reading', 'Nothing on the list. Add a book to get started.');
+  } else {
+    gridContent = `<div class="card-grid">${active.map(readingCardHTML).join('')}</div>`;
+    if (f.showDone && done.length > 0) {
+      gridContent += `<div class="section-divider" style="margin-top:20px;">Completed <span class="group-count">${done.length}</span></div><div class="card-grid">${done.map(readingCardHTML).join('')}</div>`;
+    }
+  }
 
   main.innerHTML = `
     <div class="module-header">
@@ -727,30 +893,45 @@ function renderReading(main) {
       </button>
     </div>
     <div class="filter-bar">
-      <select class="filter-select" id="filterReadingStatus">
+      <select class="filter-select" id="filterReadingGenre">
         <option value="">All</option>
-        ${Object.entries(READING_STATUS_LABELS).map(([v,l]) => `<option value="${v}"${f.status===v?' selected':''}>${l}</option>`).join('')}
+        <option value="fiction"${f.genre==='fiction'?' selected':''}>Fiction</option>
+        <option value="nonfiction"${f.genre==='nonfiction'?' selected':''}>Nonfiction</option>
       </select>
+      <span class="filter-spacer"></span>
+      <label class="toggle-label">
+        <input type="checkbox" id="showReadingDoneToggle"${f.showDone?' checked':''}>
+        <span class="toggle-track"></span>
+        Show completed
+      </label>
     </div>
-    ${items.length === 0 ? emptyState('Reading', 'Nothing on the list. Add a book to get started.') :
-      `<div class="card-grid">${items.map(readingCardHTML).join('')}</div>`}`;
+    ${gridContent}`;
 
   document.getElementById('addReadingBtn').addEventListener('click', () => openReadingModal());
-  document.getElementById('filterReadingStatus').addEventListener('change', e => { state.filters.reading.status = e.target.value; renderModule(); });
-  main.querySelectorAll('[data-edit-reading]').forEach(btn => {
-    btn.addEventListener('click', () => openReadingModal(state.data.reading.find(r => r.id === btn.dataset.editReading)));
-  });
-  main.querySelectorAll('[data-delete-reading]').forEach(btn => {
-    btn.addEventListener('click', () => { state.data.reading = state.data.reading.filter(r => r.id !== btn.dataset.deleteReading); saveData(); renderModule(); });
+  document.getElementById('filterReadingGenre').addEventListener('change', e => { state.filters.reading.genre = e.target.value; renderModule(); });
+  document.getElementById('showReadingDoneToggle').addEventListener('change', e => { state.filters.reading.showDone = e.target.checked; renderModule(); });
+  main.addEventListener('click', e => {
+    const check = e.target.closest('[data-check-reading]');
+    if (check) { toggleReading(check.dataset.checkReading); return; }
+    const edit = e.target.closest('[data-edit-reading]');
+    if (edit) { openReadingModal(state.data.reading.find(r => r.id === edit.dataset.editReading)); return; }
+    const del = e.target.closest('[data-delete-reading]');
+    if (del) { state.data.reading = state.data.reading.filter(r => r.id !== del.dataset.deleteReading); saveData(); renderModule(); }
   });
 }
 
 function readingCardHTML(r) {
-  return `<div class="card">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+  const isDone = r.status === 'done';
+  return `<div class="card${isDone ? ' card-done' : ''}">
+    <div style="display:flex;align-items:flex-start;gap:10px;">
+      <div class="card-check${isDone ? ' checked' : ''}" data-check-reading="${r.id}" role="checkbox" aria-checked="${isDone}" style="margin-top:2px;">
+        <svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/></svg>
+      </div>
       <div style="flex:1;min-width:0;">
-        <div class="card-title">${esc(r.title)}</div>
+        <div class="card-title${isDone ? ' done-title' : ''}">${esc(r.title)}</div>
         ${r.author ? `<div class="card-subtitle">${esc(r.author)}</div>` : ''}
+        ${r.genre ? `<div class="card-meta" style="margin-top:6px;"><span class="badge badge-genre-${r.genre}">${GENRE_LABELS[r.genre]}</span></div>` : ''}
+        ${r.notes ? `<div class="card-notes">${esc(r.notes)}</div>` : ''}
       </div>
       <div class="card-actions">
         <button class="btn-icon" data-edit-reading="${r.id}" title="Edit">
@@ -761,41 +942,52 @@ function readingCardHTML(r) {
         </button>
       </div>
     </div>
-    <div class="card-meta">
-      <span class="badge badge-reading-${r.status ?? 'want'}">${READING_STATUS_LABELS[r.status] ?? r.status}</span>
-    </div>
-    ${r.notes ? `<div class="card-notes">${esc(r.notes)}</div>` : ''}
   </div>`;
 }
 
 function openReadingModal(item) {
   showModal({
-    title: item ? 'Edit Book' : 'New Book',
+    title: item ? 'Edit Book' : 'Add Book',
     item,
     fields: [
       { name: 'title',  label: 'Title',  required: true },
       { name: 'author', label: 'Author', placeholder: 'Author name' },
-      { name: 'status', label: 'Status', type: 'radio', default: 'want',
-        options: Object.entries(READING_STATUS_LABELS).map(([v,l]) => ({value:v,label:l})) },
-      { name: 'notes', label: 'Notes', type: 'textarea', placeholder: 'Why you want to read it…' }
+      { name: 'genre',  label: 'Genre',  type: 'radio', default: '',
+        options: Object.entries(GENRE_LABELS).map(([v,l]) => ({value:v,label:l})) },
+      { name: 'notes', label: 'Notes', type: 'textarea', placeholder: 'Lists, recommendations, notes…' }
     ],
     onSubmit: values => {
       if (item) { Object.assign(item, values); }
-      else { state.data.reading.unshift({ id: uid(), createdAt: new Date().toISOString(), status: 'want', ...values }); }
+      else { state.data.reading.unshift({ id: uid(), createdAt: new Date().toISOString(), status: 'todo', ...values }); }
       saveData(); renderModule();
     }
   });
+}
+
+function toggleReading(id) {
+  const book = state.data.reading.find(r => r.id === id);
+  if (!book) return;
+  book.status = book.status === 'done' ? 'todo' : 'done';
+  saveData(); renderModule();
 }
 
 // ── MEDIA ──────────────────────────────────────────────────────────────────────
 
 function renderMedia(main) {
   const f = state.filters.media;
-  const items = state.data.media.filter(m => {
-    if (f.status && m.status !== f.status) return false;
-    if (f.type   && m.type   !== f.type)   return false;
-    return true;
-  });
+  const items = state.data.media.filter(m => !f.type || m.type === f.type);
+  const active = items.filter(m => m.status !== 'done');
+  const done   = items.filter(m => m.status === 'done');
+
+  let gridContent;
+  if (active.length === 0 && !f.showDone) {
+    gridContent = emptyState('Media', 'Nothing queued up. Add something to watch or listen to.');
+  } else {
+    gridContent = `<div class="card-grid">${active.map(mediaCardHTML).join('')}</div>`;
+    if (f.showDone && done.length > 0) {
+      gridContent += `<div class="section-divider" style="margin-top:20px;">Completed <span class="group-count">${done.length}</span></div><div class="card-grid">${done.map(mediaCardHTML).join('')}</div>`;
+    }
+  }
 
   main.innerHTML = `
     <div class="module-header">
@@ -813,31 +1005,46 @@ function renderMedia(main) {
         <option value="">All Types</option>
         ${Object.entries(MEDIA_TYPE_LABELS).map(([v,l]) => `<option value="${v}"${f.type===v?' selected':''}>${l}</option>`).join('')}
       </select>
-      <select class="filter-select" id="filterMediaStatus">
-        <option value="">All Statuses</option>
-        ${Object.entries(MEDIA_STATUS_LABELS).map(([v,l]) => `<option value="${v}"${f.status===v?' selected':''}>${l}</option>`).join('')}
-      </select>
+      <span class="filter-spacer"></span>
+      <label class="toggle-label">
+        <input type="checkbox" id="showMediaDoneToggle"${f.showDone?' checked':''}>
+        <span class="toggle-track"></span>
+        Show completed
+      </label>
     </div>
-    ${items.length === 0 ? emptyState('Media', 'Nothing queued up. Add something to watch or listen to.') :
-      `<div class="card-grid">${items.map(mediaCardHTML).join('')}</div>`}`;
+    ${gridContent}`;
 
   document.getElementById('addMediaBtn').addEventListener('click', () => openMediaModal());
   document.getElementById('filterMediaType').addEventListener('change', e => { state.filters.media.type = e.target.value; renderModule(); });
-  document.getElementById('filterMediaStatus').addEventListener('change', e => { state.filters.media.status = e.target.value; renderModule(); });
-  main.querySelectorAll('[data-edit-media]').forEach(btn => {
-    btn.addEventListener('click', () => openMediaModal(state.data.media.find(m => m.id === btn.dataset.editMedia)));
-  });
-  main.querySelectorAll('[data-delete-media]').forEach(btn => {
-    btn.addEventListener('click', () => { state.data.media = state.data.media.filter(m => m.id !== btn.dataset.deleteMedia); saveData(); renderModule(); });
+  document.getElementById('showMediaDoneToggle').addEventListener('change', e => { state.filters.media.showDone = e.target.checked; renderModule(); });
+  main.addEventListener('click', e => {
+    const check = e.target.closest('[data-check-media]');
+    if (check) { toggleMedia(check.dataset.checkMedia); return; }
+    const edit = e.target.closest('[data-edit-media]');
+    if (edit) { openMediaModal(state.data.media.find(m => m.id === edit.dataset.editMedia)); return; }
+    const del = e.target.closest('[data-delete-media]');
+    if (del) { state.data.media = state.data.media.filter(m => m.id !== del.dataset.deleteMedia); saveData(); renderModule(); }
   });
 }
 
+function toggleMedia(id) {
+  const item = state.data.media.find(m => m.id === id);
+  if (!item) return;
+  item.status = item.status === 'done' ? 'todo' : 'done';
+  saveData(); renderModule();
+}
+
 function mediaCardHTML(m) {
-  const statusKey = m.status === 'watching' ? 'reading' : m.status === 'done' ? 'done' : 'want';
-  return `<div class="card">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+  const isDone = m.status === 'done';
+  return `<div class="card${isDone ? ' card-done' : ''}">
+    <div style="display:flex;align-items:flex-start;gap:10px;">
+      <div class="card-check${isDone ? ' checked' : ''}" data-check-media="${m.id}" role="checkbox" aria-checked="${isDone}" style="margin-top:2px;">
+        <svg viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"/></svg>
+      </div>
       <div style="flex:1;min-width:0;">
-        <div class="card-title">${esc(m.title)}</div>
+        <div class="card-title${isDone ? ' done-title' : ''}">${esc(m.title)}</div>
+        ${m.type ? `<div class="card-meta" style="margin-top:6px;"><span class="badge badge-type-${m.type}">${MEDIA_TYPE_LABELS[m.type]??m.type}</span></div>` : ''}
+        ${m.notes ? `<div class="card-notes">${esc(m.notes)}</div>` : ''}
       </div>
       <div class="card-actions">
         <button class="btn-icon" data-edit-media="${m.id}" title="Edit">
@@ -848,28 +1055,22 @@ function mediaCardHTML(m) {
         </button>
       </div>
     </div>
-    <div class="card-meta">
-      ${m.type ? `<span class="badge badge-type-${m.type}">${MEDIA_TYPE_LABELS[m.type]??m.type}</span>` : ''}
-      <span class="badge badge-reading-${statusKey}">${MEDIA_STATUS_LABELS[m.status]??m.status}</span>
-    </div>
-    ${m.notes ? `<div class="card-notes">${esc(m.notes)}</div>` : ''}
   </div>`;
 }
 
 function openMediaModal(item) {
   showModal({
-    title: item ? 'Edit Title' : 'New Title',
+    title: item ? 'Edit Title' : 'Add Title',
     item,
     fields: [
       { name: 'title', label: 'Title', required: true },
-      { name: 'type',  label: 'Type',  type: 'select', options: Object.entries(MEDIA_TYPE_LABELS).map(([v,l])=>({value:v,label:l})) },
-      { name: 'status', label: 'Status', type: 'radio', default: 'want',
-        options: Object.entries(MEDIA_STATUS_LABELS).map(([v,l]) => ({value:v,label:l})) },
+      { name: 'type',  label: 'Type',  type: 'radio', default: '',
+        options: Object.entries(MEDIA_TYPE_LABELS).map(([v,l]) => ({value:v,label:l})) },
       { name: 'notes', label: 'Notes', type: 'textarea', placeholder: 'Notes, who recommended it…' }
     ],
     onSubmit: values => {
       if (item) { Object.assign(item, values); }
-      else { state.data.media.unshift({ id: uid(), createdAt: new Date().toISOString(), status: 'want', ...values }); }
+      else { state.data.media.unshift({ id: uid(), createdAt: new Date().toISOString(), status: 'todo', ...values }); }
       saveData(); renderModule();
     }
   });

@@ -318,6 +318,36 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 
 .filter-spacer { flex: 1; }
 
+.sort-dir-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 14px;
+  transition: all var(--transition);
+}
+.sort-dir-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }
+
+.group-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--border-light);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: var(--font-sans);
+}
+
 /* Task list */
 .task-list { display: flex; flex-direction: column; gap: 6px; }
 
@@ -479,7 +509,15 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
   flex-shrink: 0;
 }
 .card-check:hover { border-color: var(--accent); background: var(--accent-subtle); }
-.card-check svg { width: 12px; height: 12px; stroke: var(--accent); stroke-width: 2.5; }
+.card-check svg { width: 12px; height: 12px; stroke: var(--accent); stroke-width: 2.5; opacity: 0; transition: opacity var(--transition); }
+.card-check.checked { background: var(--accent); border-color: var(--accent); }
+.card-check.checked svg { stroke: white; opacity: 1; }
+
+.card-done { opacity: 0.5; }
+.done-title { text-decoration: line-through; color: var(--text-muted); }
+
+.badge-genre-fiction    { background: #F5EEFB; color: #7A5FA0; }
+.badge-genre-nonfiction { background: var(--accent-subtle); color: var(--accent); }
 
 /* People card specifics */
 .person-card-header {
@@ -743,3 +781,5 @@ select.field-input { appearance: none; cursor: pointer; }
 .upgrade-cost { font-size: 12px; color: var(--text-muted); }
 .upgrade-actions { opacity: 0; transition: opacity var(--transition); display: flex; gap: 2px; }
 .upgrade-item:hover .upgrade-actions { opacity: 1; }
+.upgrade-item.upgrade-done { opacity: 0.5; }
+.upgrade-item.upgrade-done .upgrade-title { text-decoration: line-through; color: var(--text-muted); }
